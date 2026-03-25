@@ -3,7 +3,16 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-green.svg)](https://www.python.org/downloads/)
 
-Decentralized agent reputation protocol — multidimensional ratings with bilateral blind commit-reveal and Sybil-resistant weighting. Companion to the [Chain of Consciousness](https://vibeagentmaking.com/whitepaper.html) specification.
+Decentralized agent reputation protocol — multidimensional ratings with bilateral blind commit-reveal and Sybil-resistant weighting. Reference implementation of the [Agent Rating Protocol whitepaper](https://vibeagentmaking.com/whitepaper.html), companion to the [Chain of Consciousness](https://vibeagentmaking.com/whitepaper.html) specification.
+
+## What's New in v0.2.0
+
+- **AgentIdentity** — Nested rater/ratee objects with optional `identity_proof` (whitepaper Section 4.1)
+- **Interaction Verification** — `verification_level` field: `verified`, `unilateral`, `self_reported` with automatic weight multipliers (Section 4.8)
+- **Anti-Inflation** — Rater calibration via standard deviation penalty (sigma < 10 penalized) and recency weighting (Section 4.6)
+- **Governance Cap** — No agent can hold >10% of effective voting weight (Section 5.4)
+- **Metadata** — `rater_chain_length` field for CoC chain integration (Section 4.1)
+- **Canonicalization** — Documented JCS deviation with deterministic json.dumps (Section 4.1)
 
 ## Quickstart
 
@@ -11,7 +20,14 @@ Decentralized agent reputation protocol — multidimensional ratings with bilate
 from agent_rating_protocol import RatingRecord, RatingStore, get_reputation
 
 store = RatingStore("ratings.jsonl")
-store.append_rating(RatingRecord(rater_id="agent-a", ratee_id="agent-b", reliability=85, accuracy=90, rater_chain_age_days=100, rater_total_ratings_given=50))
+store.append_rating(RatingRecord(
+    rater_id="agent-a",
+    ratee_id="agent-b",
+    reliability=85,
+    accuracy=90,
+    rater_chain_age_days=100,
+    rater_total_ratings_given=50,
+))
 print(get_reputation(store, "agent-b"))
 ```
 
@@ -31,14 +47,41 @@ pip install agent-rating-protocol[coc]
 
 - **5-dimension rating** — reliability, accuracy, latency, protocol_compliance, cost_efficiency (1-100 scale)
 - **Bilateral blind protocol** — commit-reveal ensures neither party sees the other's rating until both submit
-- **Sybil-resistant weighting** — W = log2(1 + age) × log2(1 + ratings_given). Score received never affects weight.
+- **Sybil-resistant weighting** — W = log2(1 + age) x log2(1 + ratings_given). Score received never affects weight.
+- **Interaction verification** — verified/unilateral/self_reported levels with automatic 0.5x weight for unverified
+- **Anti-inflation calibration** — raters with low score variance (sigma < 10) get penalized (Section 4.6)
+- **Governance cap** — 10% max effective voting weight per agent (Section 5.4)
+- **Recency weighting** — recent ratings carry more weight within the rolling window
 - **Append-only store** — JSONL-backed, tamper-evident via SHA-256 record hashes
 - **Rolling windows** — default 365-day window prevents stale reputation
 - **Confidence scoring** — new agents show high uncertainty, not zero trust
 - **Zero required dependencies** — stdlib only for core. Optional CoC integration.
-- **Identity-agnostic** — works with DIDs, URIs, ERC-8004, or plain strings
+- **Identity-agnostic** — works with DIDs, URIs, ERC-8004, W3C VC, or plain strings
 
 ## API Reference
+
+### AgentIdentity (v0.2.0)
+
+```python
+from agent_rating_protocol import AgentIdentity
+
+# From a dict (whitepaper schema)
+identity = AgentIdentity.from_dict({
+    "agent_id": "did:example:123",
+    "identity_proof": "vc:proof:abc"
+})
+
+# From a plain string (backward compat)
+identity = AgentIdentity.from_dict("agent-a")
+
+# Access on RatingRecord
+record = RatingRecord(
+    rater_id="agent-a",
+    ratee_id="agent-b",
+    rater_identity_proof="did:proof:rater",
+)
+print(record.rater_identity)  # AgentIdentity(agent_id='agent-a', identity_proof='did:proof:rater')
+```
 
 ### RatingRecord
 
@@ -56,9 +99,13 @@ record = RatingRecord(
     cost_efficiency=70,
     rater_chain_age_days=365,
     rater_total_ratings_given=100,
+    rater_chain_length=1500,                  # v0.2.0: CoC chain length
+    verification_level="verified",             # v0.2.0: verified|unilateral|self_reported
+    rater_identity_proof="did:proof:alice",     # v0.2.0: optional identity proof
+    ratee_identity_proof="did:proof:bob",       # v0.2.0: optional identity proof
 )
 
-record.to_dict()       # JSON-serializable dict
+record.to_dict()       # JSON-serializable dict (whitepaper schema)
 record.to_json()       # JSON string
 record.verify_hash()   # True if record_hash is valid
 record.compute_hash()  # Recompute SHA-256 hash
@@ -94,6 +141,20 @@ result = get_reputation(store, "agent-b", window_days=365)
 # Single dimension
 result = get_reputation(store, "agent-b", dimension="reliability")
 # {'agent_id': 'agent-b', 'score': 85.0, 'dimension': 'reliability', ...}
+
+# With anti-inflation calibration (Section 4.6)
+result = get_reputation(store, "agent-b", apply_calibration=True)
+```
+
+### Governance Weights (v0.2.0)
+
+```python
+from agent_rating_protocol import get_governance_weights
+
+# Compute governance weights with 10% cap (Section 5.4)
+weights = get_governance_weights(store, cap=0.10)
+# {'agent-a': 56.4, 'agent-b': 12.3, ...}
+# No agent exceeds 10% of total pre-cap weight
 ```
 
 ### Bilateral Blind Protocol
@@ -122,10 +183,21 @@ rating_a_result, rating_b_result = exchange.get_results()
 ### Weight Calculation
 
 ```python
-from agent_rating_protocol import rater_weight, confidence
+from agent_rating_protocol import (
+    rater_weight, confidence, effective_weight,
+    verification_level_multiplier, rater_calibration_factor,
+)
 
-w = rater_weight(chain_age_days=365, total_ratings_given=100)  # ≈ 56.4
-c = confidence(num_ratings=50)  # ≈ 0.833
+w = rater_weight(chain_age_days=365, total_ratings_given=100)  # ~ 56.4
+c = confidence(num_ratings=50)  # ~ 0.833
+
+# v0.2.0: verification level multipliers
+verification_level_multiplier("verified")       # 1.0
+verification_level_multiplier("unilateral")     # 0.5
+verification_level_multiplier("self_reported")  # 0.5
+
+# v0.2.0: anti-inflation calibration
+factor = rater_calibration_factor([95, 95, 95, 96, 94])  # low sigma -> penalty
 ```
 
 ## CLI Reference
@@ -134,9 +206,18 @@ c = confidence(num_ratings=50)  # ≈ 0.833
 # Submit a rating
 agent-rating rate agent-b --rater agent-a --reliability 85 --accuracy 90
 
+# v0.2.0: with verification level and identity proofs
+agent-rating rate agent-b --rater agent-a --reliability 85 \
+  --verification-level unilateral \
+  --chain-length 1500 \
+  --rater-proof "did:proof:alice"
+
 # Query reputation
 agent-rating query agent-b
 agent-rating query agent-b --dimension reliability --window 180
+
+# v0.2.0: with anti-inflation calibration
+agent-rating query agent-b --calibrated
 
 # Verify a rating hash
 agent-rating verify <rating-uuid>
@@ -176,14 +257,27 @@ Score buckets: 1-20 poor, 21-40 below average, 41-60 average, 61-80 good, 81-100
 ## Weight Formula
 
 ```
-W(rater) = log2(1 + chain_age_days) × log2(1 + total_ratings_given)
+W(rater) = log2(1 + chain_age_days) x log2(1 + total_ratings_given)
 ```
 
 Governance weight equals rating weight by design — both derived from tenure and participation, never from score received.
 
-## Design Specification
+**Verification level multipliers (v0.2.0):** Unilateral and self-reported ratings carry 0.5x weight.
 
-Full protocol design, game theory analysis, and governance model: see the [Agent Rating System Design](https://vibeagentmaking.com/whitepaper.html) specification.
+**Anti-inflation (v0.2.0):** Raters with standard deviation < 10 across all their scores are penalized by sigma/10.
+
+**Governance cap (v0.2.0):** No agent can hold >10% of effective voting weight.
+
+## Canonicalization
+
+Record hashes use `json.dumps(sort_keys=True, separators=(",",":"))` for deterministic serialization. The whitepaper specifies JCS (RFC 8785). The deviation is documented in the source and has no practical impact for the data types used (strings, integers, booleans). For strict compliance, substitute an RFC 8785 library.
+
+## Whitepaper
+
+Full protocol specification, game theory analysis, and governance model:
+
+- **[Agent Rating Protocol Whitepaper](https://vibeagentmaking.com/whitepaper.html)** — Decentralized reputation for autonomous agent economies
+- **[Chain of Consciousness](https://vibeagentmaking.com/whitepaper.html)** — Cryptographic provenance chains for AI agent identity
 
 ## Security Disclaimer (VAM-SEC v1.0)
 
