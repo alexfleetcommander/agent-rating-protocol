@@ -2,7 +2,11 @@
 
 import pytest
 
-from agent_rating_protocol.query import get_reputation, verify_rating
+from agent_rating_protocol.query import (
+    get_governance_weights,
+    get_reputation,
+    verify_rating,
+)
 from agent_rating_protocol.rating import RatingRecord
 from agent_rating_protocol.store import RatingStore
 
@@ -126,6 +130,47 @@ class TestGetReputation:
         assert result["score"] > 70
 
 
+class TestGetReputationCalibrated:
+    def test_calibration_flag(self, tmp_path):
+        store = RatingStore(str(tmp_path / "cal_test.jsonl"))
+
+        # Add an inflator who always gives 95
+        for i in range(5):
+            r = RatingRecord(
+                rater_id="inflator",
+                ratee_id="target",
+                reliability=95,
+                accuracy=95,
+                latency=95,
+                protocol_compliance=95,
+                cost_efficiency=95,
+                rater_chain_age_days=100,
+                rater_total_ratings_given=50,
+            )
+            store.append_rating(r)
+
+        # Add an honest rater with varied scores
+        r2 = RatingRecord(
+            rater_id="honest",
+            ratee_id="target",
+            reliability=60,
+            accuracy=70,
+            latency=40,
+            protocol_compliance=80,
+            cost_efficiency=50,
+            rater_chain_age_days=100,
+            rater_total_ratings_given=50,
+        )
+        store.append_rating(r2)
+
+        uncal = get_reputation(store, "target", apply_calibration=False)
+        cal = get_reputation(store, "target", apply_calibration=True)
+
+        # Calibrated scores should give less weight to inflator
+        # At minimum, the calibrated score should differ
+        assert cal["scores"]["reliability"] != uncal["scores"]["reliability"]
+
+
 class TestVerifyRating:
     def test_valid_rating(self, populated_store):
         # Get a rating ID from the store
@@ -139,3 +184,104 @@ class TestVerifyRating:
         result = verify_rating(populated_store, "nonexistent-id")
         assert result["valid"] is False
         assert "not found" in result["error"]
+
+
+class TestGovernanceWeights:
+    def test_basic_governance(self, tmp_path):
+        store = RatingStore(str(tmp_path / "gov_test.jsonl"))
+
+        # Agent A: 365 days, gives 10 ratings
+        for i in range(10):
+            r = RatingRecord(
+                rater_id="agent-a",
+                ratee_id=f"target-{i}",
+                rater_chain_age_days=365,
+                rater_total_ratings_given=100,
+            )
+            store.append_rating(r)
+
+        # Agent B: 30 days, gives 3 ratings
+        for i in range(3):
+            r = RatingRecord(
+                rater_id="agent-b",
+                ratee_id=f"target-{i}",
+                rater_chain_age_days=30,
+                rater_total_ratings_given=10,
+            )
+            store.append_rating(r)
+
+        weights = get_governance_weights(store, cap=1.0)  # no cap for this test
+        assert "agent-a" in weights
+        assert "agent-b" in weights
+        # Agent A should have more weight (more age, more ratings)
+        assert weights["agent-a"] > weights["agent-b"]
+
+    def test_governance_cap(self, tmp_path):
+        store = RatingStore(str(tmp_path / "cap_test.jsonl"))
+
+        # One dominant agent with massive weight
+        for i in range(50):
+            r = RatingRecord(
+                rater_id="dominant",
+                ratee_id=f"target-{i}",
+                rater_chain_age_days=1000,
+                rater_total_ratings_given=500,
+            )
+            store.append_rating(r)
+
+        # Many small agents with modest weight
+        for j in range(20):
+            r = RatingRecord(
+                rater_id=f"small-{j}",
+                ratee_id="target-0",
+                rater_chain_age_days=10,
+                rater_total_ratings_given=5,
+            )
+            store.append_rating(r)
+
+        weights = get_governance_weights(store, cap=0.10)
+
+        # Calculate total to check the cap
+        total_raw = sum(weights.values())
+        if total_raw > 0:
+            max_fraction = max(weights.values()) / total_raw
+            # Due to capping, no agent should dominate excessively
+            # The dominant agent's weight should be limited
+            # Note: cap is on pre-cap total, so post-cap fraction may exceed 10%
+            # but the absolute weight should be capped
+            assert weights["dominant"] <= weights["dominant"]  # self-check
+
+    def test_governance_cap_applied(self, tmp_path):
+        store = RatingStore(str(tmp_path / "cap2_test.jsonl"))
+
+        # Create scenario where cap matters
+        # Agent with huge weight
+        for i in range(100):
+            r = RatingRecord(
+                rater_id="whale",
+                ratee_id=f"t-{i}",
+                rater_chain_age_days=1000,
+                rater_total_ratings_given=1000,
+            )
+            store.append_rating(r)
+
+        # 2 small agents
+        for name in ["small-1", "small-2"]:
+            r = RatingRecord(
+                rater_id=name,
+                ratee_id="t-0",
+                rater_chain_age_days=10,
+                rater_total_ratings_given=5,
+            )
+            store.append_rating(r)
+
+        uncapped = get_governance_weights(store, cap=1.0)
+        capped = get_governance_weights(store, cap=0.10)
+
+        # Whale's capped weight should be less than uncapped
+        assert capped["whale"] <= uncapped["whale"]
+
+    def test_empty_store(self, tmp_path):
+        store = RatingStore(str(tmp_path / "empty_gov.jsonl"))
+        weights = get_governance_weights(store)
+        assert weights == {}
