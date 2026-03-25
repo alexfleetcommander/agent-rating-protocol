@@ -13,7 +13,7 @@ import sys
 from typing import List, Optional
 
 from .query import get_reputation, verify_rating
-from .rating import DIMENSIONS, RatingRecord
+from .rating import DIMENSIONS, VERIFICATION_LEVELS, RatingRecord
 from .store import RatingStore
 
 
@@ -68,6 +68,28 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Rater's total ratings given",
     )
     p_rate.add_argument(
+        "--chain-length",
+        type=int,
+        default=None,
+        help="Rater's CoC chain length (optional)",
+    )
+    p_rate.add_argument(
+        "--verification-level",
+        choices=list(VERIFICATION_LEVELS),
+        default="verified",
+        help="Interaction verification level (default: verified)",
+    )
+    p_rate.add_argument(
+        "--rater-proof",
+        default=None,
+        help="Rater identity proof reference (optional)",
+    )
+    p_rate.add_argument(
+        "--ratee-proof",
+        default=None,
+        help="Ratee identity proof reference (optional)",
+    )
+    p_rate.add_argument(
         "--json", action="store_true", help="Output result as JSON"
     )
 
@@ -84,6 +106,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=365,
         help="Rolling window in days (default: 365)",
+    )
+    p_query.add_argument(
+        "--calibrated",
+        action="store_true",
+        help="Apply anti-inflation calibration (Section 4.6)",
     )
     p_query.add_argument(
         "--json", action="store_true", help="Output result as JSON"
@@ -119,6 +146,10 @@ def _cmd_rate(args: argparse.Namespace) -> int:
             cost_efficiency=args.cost_efficiency,
             rater_chain_age_days=args.chain_age,
             rater_total_ratings_given=args.ratings_given,
+            rater_chain_length=args.chain_length,
+            verification_level=args.verification_level,
+            rater_identity_proof=args.rater_proof,
+            ratee_identity_proof=args.ratee_proof,
         )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -132,6 +163,7 @@ def _cmd_rate(args: argparse.Namespace) -> int:
         print(f"Rating submitted: {rating_id}")
         print(f"  Rater: {record.rater_id}")
         print(f"  Ratee: {record.ratee_id}")
+        print(f"  Verification: {record.verification_level}")
         dims = record.dimensions
         for dim, val in dims.items():
             print(f"  {dim}: {val}")
@@ -150,6 +182,7 @@ def _cmd_query(args: argparse.Namespace) -> int:
         args.agent_id,
         dimension=args.dimension,
         window_days=args.window,
+        apply_calibration=getattr(args, "calibrated", False),
     )
 
     if args.json:
