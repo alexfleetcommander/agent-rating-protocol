@@ -1,7 +1,10 @@
 """Query interface for reputation scores.
 
-Implements Section 2.5 weighted reputation queries with rolling windows,
-confidence scores (Section 4.4), and per-dimension filtering.
+Implements the Agent Rating Protocol whitepaper:
+- Section 4.5: weighted reputation queries with rolling windows
+- Section 4.5: confidence scores
+- Section 4.6: anti-inflation calibration (optional)
+- Section 5.4: governance weight cap (10% per agent)
 """
 
 from datetime import datetime, timedelta, timezone
@@ -9,7 +12,13 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from .rating import DIMENSIONS, RatingRecord
 from .store import RatingStore
-from .weight import confidence, rater_weight, weighted_score, weighted_scores_all
+from .weight import (
+    confidence,
+    compute_rater_calibrations,
+    rater_weight,
+    weighted_score,
+    weighted_scores_all,
+)
 
 
 def _parse_timestamp(ts: str) -> datetime:
@@ -48,6 +57,7 @@ def get_reputation(
     agent_id: str,
     dimension: Optional[str] = None,
     window_days: int = 365,
+    apply_calibration: bool = False,
 ) -> Dict[str, Any]:
     """Query an agent's reputation from the local store.
 
@@ -56,6 +66,9 @@ def get_reputation(
         agent_id: The agent to look up.
         dimension: If specified, return only this dimension. Otherwise all five.
         window_days: Rolling window in days (default 365 per spec).
+        apply_calibration: If True, apply anti-inflation rater calibration
+            (Section 4.6). Requires reading all ratings to compute per-rater
+            standard deviations.
 
     Returns:
         Dict with scores, confidence, num_ratings, and agent_id.
@@ -92,12 +105,18 @@ def get_reputation(
             result["scores"] = {dim: None for dim in DIMENSIONS}
         return result
 
+    # Compute calibration factors if requested (Section 4.6)
+    cal_factors = None
+    if apply_calibration:
+        all_store_ratings = store.get_all()
+        cal_factors = compute_rater_calibrations(all_store_ratings)
+
     if dimension:
-        score = weighted_score(ratings, dimension)
+        score = weighted_score(ratings, dimension, cal_factors)
         result["dimension"] = dimension
         result["score"] = round(score, 2) if score is not None else None
     else:
-        scores = weighted_scores_all(ratings)
+        scores = weighted_scores_all(ratings, cal_factors)
         result["scores"] = {
             dim: round(s, 2) if s is not None else None
             for dim, s in scores.items()
@@ -135,6 +154,61 @@ def get_reputation_summary(
         rep["buckets"] = buckets
 
     return rep
+
+
+def get_governance_weights(
+    store: RatingStore,
+    cap: float = 0.10,
+) -> Dict[str, float]:
+    """Compute governance weights for all agents with a per-agent cap.
+
+    Per Section 5.4, no agent can hold more than 10% of effective voting
+    weight. GovWeight uses the same formula as rating weight:
+    log2(1 + age) * log2(1 + ratings_given).
+
+    The cap is applied as a fraction of the pre-cap total weight. This
+    prevents any single agent from dominating governance decisions.
+
+    Args:
+        store: The RatingStore to analyze.
+        cap: Maximum fraction of total weight any agent can hold (default 0.10).
+
+    Returns:
+        Dict mapping agent_id to capped governance weight.
+    """
+    all_ratings = store.get_all()
+
+    # Collect per-agent stats (age and rating count)
+    agent_stats: Dict[str, Dict[str, int]] = {}
+    for r in all_ratings:
+        if r.rater_id not in agent_stats:
+            agent_stats[r.rater_id] = {
+                "chain_age_days": r.rater_chain_age_days,
+                "ratings_given": 0,
+            }
+        agent_stats[r.rater_id]["ratings_given"] += 1
+        # Use the highest age seen for this rater
+        if r.rater_chain_age_days > agent_stats[r.rater_id]["chain_age_days"]:
+            agent_stats[r.rater_id]["chain_age_days"] = r.rater_chain_age_days
+
+    # Compute raw governance weights
+    raw_weights: Dict[str, float] = {}
+    for agent_id, stats in agent_stats.items():
+        raw_weights[agent_id] = rater_weight(
+            stats["chain_age_days"], stats["ratings_given"]
+        )
+
+    # Apply per-agent cap (Section 5.4)
+    total = sum(raw_weights.values())
+    if total == 0:
+        return raw_weights
+
+    max_weight = cap * total
+    capped: Dict[str, float] = {}
+    for agent_id, w in raw_weights.items():
+        capped[agent_id] = min(w, max_weight)
+
+    return capped
 
 
 def verify_rating(store: RatingStore, rating_id: str) -> Dict[str, Any]:
