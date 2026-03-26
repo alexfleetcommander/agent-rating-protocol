@@ -1,10 +1,13 @@
 """CLI entry point for agent-rating-protocol.
 
 Commands:
-  rate     Submit a rating for an agent
-  query    Check an agent's reputation
-  verify   Verify a rating record hash
-  status   Show local store statistics
+  rate           Submit a rating for an agent
+  query          Check an agent's reputation
+  verify         Verify a rating record hash
+  status         Show local store statistics
+  compose        Compute a composite trust score (v2)
+  export-prb     Generate a Portable Reputation Bundle (v2)
+  verify-signal  Verify a signal via Merkle proof (v2)
 """
 
 import argparse
@@ -12,7 +15,13 @@ import json
 import sys
 from typing import List, Optional
 
-from .query import get_reputation, verify_rating
+from .composition import STANDARD_PROFILES
+from .query import (
+    generate_prb_from_store,
+    get_composite,
+    get_reputation,
+    verify_rating,
+)
 from .rating import DIMENSIONS, VERIFICATION_LEVELS, RatingRecord
 from .store import RatingStore
 
@@ -129,6 +138,77 @@ def _build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="Output result as JSON"
     )
 
+    # compose (v2)
+    p_compose = sub.add_parser(
+        "compose", help="Compute a composite trust score (v2)"
+    )
+    p_compose.add_argument("agent_id", help="Agent ID to compute composite for")
+    p_compose.add_argument(
+        "--profile",
+        choices=list(STANDARD_PROFILES.keys()),
+        default="general-purpose",
+        help="Weight profile (default: general-purpose)",
+    )
+    p_compose.add_argument(
+        "--window", type=int, default=365, help="Rolling window in days"
+    )
+    p_compose.add_argument(
+        "--coc-age", type=int, default=0, help="Agent's CoC chain age in days"
+    )
+    p_compose.add_argument(
+        "--participation",
+        type=float,
+        default=0.0,
+        help="Rating participation rate (0.0-1.0)",
+    )
+    p_compose.add_argument(
+        "--json", action="store_true", help="Output result as JSON"
+    )
+
+    # export-prb (v2)
+    p_prb = sub.add_parser(
+        "export-prb", help="Generate a Portable Reputation Bundle (v2)"
+    )
+    p_prb.add_argument("agent_id", help="Agent ID to generate PRB for")
+    p_prb.add_argument(
+        "--issuer", required=True, help="DID of the issuing oracle"
+    )
+    p_prb.add_argument(
+        "--profile",
+        choices=list(STANDARD_PROFILES.keys()),
+        default="general-purpose",
+        help="Weight profile (default: general-purpose)",
+    )
+    p_prb.add_argument(
+        "--coc-age", type=int, default=0, help="Agent's CoC chain age in days"
+    )
+    p_prb.add_argument(
+        "--coc-length", type=int, default=0, help="Agent's CoC chain length"
+    )
+    p_prb.add_argument(
+        "--output", default="", help="Output file path (default: stdout)"
+    )
+
+    # verify-signal (v2)
+    p_vsig = sub.add_parser(
+        "verify-signal", help="Verify a signal via Merkle proof (v2)"
+    )
+    p_vsig.add_argument("agent_id", help="Agent ID whose signals to verify")
+    p_vsig.add_argument(
+        "--root-hash",
+        default="",
+        help="Expected Merkle root hash (computed from store if omitted)",
+    )
+    p_vsig.add_argument(
+        "--sample",
+        type=int,
+        default=50,
+        help="Sample size for verification (0=all, default: 50)",
+    )
+    p_vsig.add_argument(
+        "--json", action="store_true", help="Output result as JSON"
+    )
+
     return parser
 
 
@@ -240,6 +320,95 @@ def _cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_compose(args: argparse.Namespace) -> int:
+    store = RatingStore(args.store)
+    result = get_composite(
+        store,
+        args.agent_id,
+        profile_name=args.profile,
+        window_days=args.window,
+        coc_age_days=args.coc_age,
+        rating_participation_rate=args.participation,
+    )
+
+    if args.json:
+        print(json.dumps(result, indent=2))
+    else:
+        comp = result.get("composite", {})
+        print(f"Composite for: {result['agent_id']}")
+        print(f"  Profile: {result['profile']}")
+        print(f"  Ratings: {result['num_ratings']}")
+        value = comp.get("value", -1)
+        if value < 0:
+            print(f"  Status: {comp.get('gate_status', 'unknown')}")
+        else:
+            print(f"  Score: {value}")
+            print(f"  Confidence: {comp.get('confidence', 0)}")
+            print(f"  Gate status: {comp.get('gate_status', 'unknown')}")
+            weakest = comp.get("weakest_input")
+            if weakest:
+                print(
+                    f"  Weakest input: {weakest['signal_id']} "
+                    f"(confidence: {weakest['confidence']})"
+                )
+
+    return 0
+
+
+def _cmd_export_prb(args: argparse.Namespace) -> int:
+    store = RatingStore(args.store)
+    vc = generate_prb_from_store(
+        store,
+        args.agent_id,
+        issuer_id=args.issuer,
+        profile_name=args.profile,
+        coc_age_days=args.coc_age,
+        coc_chain_length=args.coc_length,
+    )
+
+    if "error" in vc:
+        print(f"Error: {vc['error']}", file=sys.stderr)
+        return 1
+
+    output_json = json.dumps(vc, indent=2)
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(output_json + "\n")
+        print(f"PRB written to: {args.output}")
+    else:
+        print(output_json)
+
+    return 0
+
+
+def _cmd_verify_signal(args: argparse.Namespace) -> int:
+    from .portability import compute_ratings_root_hash
+    from .signals import verify_prb_merkle
+
+    store = RatingStore(args.store)
+    ratings = store.get_ratings_for(args.agent_id)
+
+    if not ratings:
+        print(f"No ratings found for {args.agent_id}", file=sys.stderr)
+        return 1
+
+    hashes = [r.record_hash for r in ratings if r.record_hash]
+    root_hash = args.root_hash or compute_ratings_root_hash(hashes)
+
+    result = verify_prb_merkle(root_hash, hashes, sample_size=args.sample)
+
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print(f"Signal Verification for: {args.agent_id}")
+        print(f"  Root hash matches: {result.root_hash_matches}")
+        print(f"  Proofs verified: {result.proofs_verified}/{result.sample_size}")
+        print(f"  Proofs failed: {result.proofs_failed}")
+        print(f"  Total ratings: {result.total_ratings}")
+
+    return 0 if result.proofs_failed == 0 and result.root_hash_matches else 1
+
+
 def _try_coc_record(record: RatingRecord) -> None:
     """Optionally record rating to a CoC chain if the package is installed."""
     try:
@@ -282,6 +451,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         "query": _cmd_query,
         "verify": _cmd_verify,
         "status": _cmd_status,
+        "compose": _cmd_compose,
+        "export-prb": _cmd_export_prb,
+        "verify-signal": _cmd_verify_signal,
     }
 
     handler = handlers.get(args.command)
