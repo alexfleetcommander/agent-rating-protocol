@@ -5,8 +5,13 @@ Implements the Agent Rating Protocol whitepaper:
 - Section 4.5: confidence scores
 - Section 4.6: anti-inflation calibration (optional)
 - Section 5.4: governance weight cap (10% per agent)
+
+v2 additions:
+- get_composite(): compute composite scores via composition layer
+- generate_prb_from_store(): generate a PRB from local store data
 """
 
+import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -16,6 +21,7 @@ from .weight import (
     confidence,
     compute_rater_calibrations,
     rater_weight,
+    signals_from_ratings,
     weighted_score,
     weighted_scores_all,
 )
@@ -240,3 +246,184 @@ def verify_rating(store: RatingStore, rating_id: str) -> Dict[str, Any]:
         result["error"] = "Hash mismatch — record may have been tampered"
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# v2: Composite score queries (Section 3)
+# ---------------------------------------------------------------------------
+
+def get_composite(
+    store: RatingStore,
+    agent_id: str,
+    profile_name: str = "general-purpose",
+    window_days: int = 365,
+    apply_calibration: bool = False,
+    coc_age_days: int = 0,
+    rating_participation_rate: float = 0.0,
+    computed_by: str = "",
+) -> Dict[str, Any]:
+    """Compute a composite trust score for an agent.
+
+    Bridges the v1 store to the v2 composition layer.
+
+    Args:
+        store: The RatingStore to query.
+        agent_id: The agent to compute a composite for.
+        profile_name: Standard profile name (e.g. "general-purpose").
+        window_days: Rolling window in days.
+        apply_calibration: If True, apply anti-inflation calibration.
+        coc_age_days: Agent's CoC chain age in days.
+        rating_participation_rate: Agent's rating participation rate (0-1).
+        computed_by: DID of the computing entity.
+
+    Returns:
+        Dict with composite signal data and metadata.
+    """
+    from .composition import compose, get_profile
+
+    all_ratings = store.get_ratings_for(agent_id)
+    ratings = _filter_by_window(all_ratings, window_days)
+
+    cal_factors = None
+    if apply_calibration:
+        all_store_ratings = store.get_all()
+        cal_factors = compute_rater_calibrations(all_store_ratings)
+
+    signals = signals_from_ratings(
+        ratings,
+        calibration_factors=cal_factors,
+        coc_age_days=coc_age_days,
+        rating_participation_rate=rating_participation_rate,
+    )
+
+    profile = get_profile(profile_name)
+    composite = compose(signals, profile, computed_by=computed_by)
+
+    return {
+        "agent_id": agent_id,
+        "profile": profile_name,
+        "composite": composite.to_dict(),
+        "num_ratings": len(ratings),
+        "window_days": window_days,
+    }
+
+
+def generate_prb_from_store(
+    store: RatingStore,
+    agent_id: str,
+    issuer_id: str,
+    profile_name: str = "general-purpose",
+    window_days: int = 365,
+    coc_age_days: int = 0,
+    coc_chain_length: int = 0,
+    coc_chain_head_hash: str = "",
+    last_anchor_timestamp: str = "",
+    total_interactions: int = 0,
+    rating_participation_rate: float = 0.0,
+    dispute_rate: float = 0.0,
+    avg_response_time_ms: int = 0,
+    issuer_name: str = "",
+    issuer_reliability: float = 0.0,
+    issuer_confidence: float = 0.0,
+    verification_endpoint: str = "",
+    validity_days: int = 30,
+) -> Dict[str, Any]:
+    """Generate a Portable Reputation Bundle from local store data.
+
+    Computes all required data and produces a W3C VC format PRB.
+
+    Args:
+        store: The RatingStore to query.
+        agent_id: The agent to generate a PRB for.
+        issuer_id: DID of the issuing oracle.
+        profile_name: Standard profile for composite computation.
+        window_days: Rolling window in days.
+        coc_age_days: Agent's chain age.
+        coc_chain_length: Agent's chain length.
+        coc_chain_head_hash: Latest chain entry hash.
+        last_anchor_timestamp: Latest anchor timestamp.
+        total_interactions: Total interactions count.
+        rating_participation_rate: Rating participation rate.
+        dispute_rate: Dispute rate.
+        avg_response_time_ms: Average response time.
+        issuer_name: Oracle name.
+        issuer_reliability: Oracle's reliability score.
+        issuer_confidence: Oracle's confidence.
+        verification_endpoint: Verification URL.
+        validity_days: PRB validity in days.
+
+    Returns:
+        Dict containing the PRB in W3C VC format.
+    """
+    from .composition import compose, get_profile
+    from .portability import (
+        BehavioralSummary,
+        DimensionSummary,
+        ProvenanceSummary,
+        generate_prb,
+    )
+
+    all_ratings = store.get_ratings_for(agent_id)
+    ratings = _filter_by_window(all_ratings, window_days)
+
+    if not ratings:
+        return {"error": "No ratings found for agent", "agent_id": agent_id}
+
+    # Build signals and compute composite
+    signals = signals_from_ratings(
+        ratings,
+        coc_age_days=coc_age_days,
+        rating_participation_rate=rating_participation_rate,
+    )
+    profile = get_profile(profile_name)
+    composite = compose(signals, profile, computed_by=issuer_id)
+
+    # Build dimension summaries
+    dims: Dict[str, DimensionSummary] = {}
+    num = len(ratings)
+    conf = confidence(num)
+    for dim in DIMENSIONS:
+        values = [float(getattr(r, dim)) for r in ratings]
+        mean_val = statistics.mean(values) if values else 0.0
+        std_val = statistics.stdev(values) if len(values) >= 2 else 0.0
+        dims[dim] = DimensionSummary(
+            mean=mean_val,
+            stddev=std_val,
+            confidence=conf,
+            count=num,
+        )
+
+    # Collect rating hashes for Merkle root
+    rating_hashes = [r.record_hash for r in ratings if r.record_hash]
+
+    provenance = ProvenanceSummary(
+        coc_chain_age=coc_age_days,
+        coc_chain_length=coc_chain_length,
+        last_anchor_timestamp=last_anchor_timestamp,
+        anchor_type="dual_ots_tsa",
+    )
+
+    behavioral = BehavioralSummary(
+        total_interactions=total_interactions or num,
+        rating_participation_rate=rating_participation_rate,
+        dispute_rate=dispute_rate,
+        average_response_time_ms=avg_response_time_ms,
+    )
+
+    prb = generate_prb(
+        issuer_id=issuer_id,
+        subject_id=agent_id,
+        composite=composite,
+        dimensions=dims,
+        rating_hashes=rating_hashes,
+        provenance=provenance,
+        behavioral=behavioral,
+        issuer_name=issuer_name,
+        issuer_reliability=issuer_reliability,
+        issuer_confidence=issuer_confidence,
+        coc_chain_head_hash=coc_chain_head_hash,
+        verification_endpoint=verification_endpoint,
+        validity_days=validity_days,
+    )
+
+    return prb.to_vc()
