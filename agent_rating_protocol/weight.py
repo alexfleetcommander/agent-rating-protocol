@@ -6,14 +6,21 @@ Implements the Agent Rating Protocol whitepaper:
 - Anti-inflation rater calibration — sigma < 10 penalty (Section 4.6)
 - Recency weighting within rolling window (Section 3.2)
 - Weighted aggregate score per dimension (Section 4.5)
+
+v2 additions:
+- composition_weights(): bridge to composition layer (Section 3)
+- signals_from_ratings(): convert rating aggregates to Signal objects
 """
 
 import math
 import statistics
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 from .rating import DIMENSIONS, RatingRecord
+
+if TYPE_CHECKING:
+    from .composition import Signal
 
 
 # Verification level weight multipliers (Section 4.8)
@@ -252,3 +259,78 @@ def confidence(num_ratings: int) -> float:
     if num_ratings < 0:
         raise ValueError("num_ratings must be non-negative")
     return 1.0 - 1.0 / (1.0 + 0.1 * num_ratings)
+
+
+# ---------------------------------------------------------------------------
+# v2: Composition-aware helpers
+# ---------------------------------------------------------------------------
+
+def signals_from_ratings(
+    ratings: Sequence[RatingRecord],
+    calibration_factors: Optional[Dict[str, float]] = None,
+    source: str = "",
+    coc_age_days: int = 0,
+    rating_participation_rate: float = 0.0,
+) -> "List[Signal]":
+    """Convert rating aggregates into Signal objects for composition.
+
+    Bridges the v1 rating system to the v2 composition layer by
+    producing one Signal per dimension plus provenance and behavioral signals.
+
+    Args:
+        ratings: All ratings for a single ratee.
+        calibration_factors: Optional rater calibration factors.
+        source: Source identifier (e.g. aggregation node DID).
+        coc_age_days: Agent's CoC chain age in days.
+        rating_participation_rate: Agent's rating participation rate (0-1).
+
+    Returns:
+        List of Signal objects suitable for compose().
+    """
+    from .composition import Signal
+
+    signals: List[Signal] = []
+    num = len(ratings)
+    conf = confidence(num)
+
+    # Rating dimension signals
+    scores = weighted_scores_all(ratings, calibration_factors)
+    for dim, score in scores.items():
+        if score is not None:
+            signals.append(Signal(
+                signal_type="rating_dimension",
+                signal_id=f"arp:{dim}:weighted_mean",
+                value=score,
+                confidence=conf,
+                source=source,
+                sample_size=num,
+            ))
+
+    # Total ratings received (for gate checks)
+    signals.append(Signal(
+        signal_type="behavioral",
+        signal_id="arp:total_ratings_received",
+        value=float(num),
+        confidence=1.0,
+        source=source,
+    ))
+
+    # Provenance signal: operational age
+    signals.append(Signal(
+        signal_type="provenance",
+        signal_id="coc:operational_age_days",
+        value=float(coc_age_days),
+        confidence=1.0,
+        source=source,
+    ))
+
+    # Behavioral signal: rating participation
+    signals.append(Signal(
+        signal_type="behavioral",
+        signal_id="behavioral:rating_participation_rate",
+        value=rating_participation_rate * 100.0,  # Scale to 0-100
+        confidence=1.0,
+        source=source,
+    ))
+
+    return signals
