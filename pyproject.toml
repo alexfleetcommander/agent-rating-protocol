@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-rating-protocol"
-version = "0.2.0"
-description = "Decentralized agent reputation protocol — multidimensional ratings with bilateral blind commit-reveal and Sybil-resistant weighting"
+version = "0.3.0"
+description = "Decentralized agent reputation protocol — signal composition, portable reputation bundles, Merkle verification, and anti-Goodhart architecture"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.8"
 authors = [
     { name = "AB Support", email = "info@vibeagentmaking.com" },
 ]
-keywords = ["agent", "rating", "reputation", "decentralized", "provenance", "trust"]
+keywords = ["agent", "rating", "reputation", "decentralized", "provenance", "trust", "composition", "portability", "verification"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
