@@ -3,16 +3,29 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-green.svg)](https://www.python.org/downloads/)
 
-Decentralized agent reputation protocol — multidimensional ratings with bilateral blind commit-reveal and Sybil-resistant weighting. Reference implementation of the [Agent Rating Protocol whitepaper](https://vibeagentmaking.com/whitepaper.html), companion to the [Chain of Consciousness](https://vibeagentmaking.com/whitepaper.html) specification.
+Decentralized agent reputation protocol — signal composition, portable reputation bundles, Merkle verification, and anti-Goodhart architecture. Reference implementation of the [Agent Rating Protocol whitepaper](https://vibeagentmaking.com/whitepaper.html), companion to the [Chain of Consciousness](https://vibeagentmaking.com/whitepaper.html) specification.
 
-## What's New in v0.2.0
+## What's New in v0.3.0
 
-- **AgentIdentity** — Nested rater/ratee objects with optional `identity_proof` (whitepaper Section 4.1)
+**Signal Composition** (Section 3) — Combine ARP ratings, CoC provenance, and behavioral signals into configurable composite trust scores. Five composition operations (weighted linear, confidence-adjusted, threshold gates, diminishing returns, penalty floors) applied in canonical order. Five standard weight profiles: general-purpose, high-reliability, fast-turnaround, compliance-first, cost-optimized.
+
+**Signal Portability** (Section 4) — Portable Reputation Bundles (PRBs) in W3C Verifiable Credential format. Multi-oracle attestation with median consensus and divergence detection. Trust discount model for cross-platform reputation transfer.
+
+**Signal Verification** (Section 5) — Three verification levels: hash-chain (basic), Merkle proof (standard), ZKP threshold (placeholder for future). Full Merkle tree implementation with sampled verification for large rating sets.
+
+**Anti-Goodhart Architecture** (Section 6) — Metric rotation with published bounds. Shadow metric tracking with divergence detection. Differential privacy noise injection for composite score queries.
+
+### Previous releases
+
+<details>
+<summary>v0.2.0</summary>
+
+- **AgentIdentity** — Nested rater/ratee objects with optional `identity_proof` (Section 4.1)
 - **Interaction Verification** — `verification_level` field: `verified`, `unilateral`, `self_reported` with automatic weight multipliers (Section 4.8)
-- **Anti-Inflation** — Rater calibration via standard deviation penalty (sigma < 10 penalized) and recency weighting (Section 4.6)
+- **Anti-Inflation** — Rater calibration via standard deviation penalty (sigma < 10) and recency weighting (Section 4.6)
 - **Governance Cap** — No agent can hold >10% of effective voting weight (Section 5.4)
 - **Metadata** — `rater_chain_length` field for CoC chain integration (Section 4.1)
-- **Canonicalization** — Documented JCS deviation with deterministic json.dumps (Section 4.1)
+</details>
 
 ## Quickstart
 
@@ -31,6 +44,63 @@ store.append_rating(RatingRecord(
 print(get_reputation(store, "agent-b"))
 ```
 
+### v0.3.0: Composite Scores
+
+```python
+from agent_rating_protocol import get_composite
+
+result = get_composite(
+    store, "agent-b",
+    profile_name="general-purpose",
+    coc_age_days=100,
+    rating_participation_rate=0.8,
+)
+print(result["composite"]["value"])     # e.g. 78.4
+print(result["composite"]["confidence"]) # e.g. 0.83
+```
+
+### v0.3.0: Portable Reputation Bundles
+
+```python
+from agent_rating_protocol import generate_prb_from_store
+
+vc = generate_prb_from_store(
+    store, "agent-b",
+    issuer_id="did:web:oracle.example.com",
+    coc_age_days=312,
+)
+# Returns a W3C Verifiable Credential dict
+print(vc["credentialSubject"]["reputationSummary"])
+```
+
+### v0.3.0: Signal Verification
+
+```python
+from agent_rating_protocol.signals import MerkleTree, verify_merkle_proof
+
+hashes = [r.record_hash for r in store.get_ratings_for("agent-b")]
+tree = MerkleTree(hashes)
+proof = tree.get_proof(0)
+assert verify_merkle_proof(proof)  # Proves rating is in the tree
+```
+
+### v0.3.0: Anti-Goodhart
+
+```python
+from agent_rating_protocol.anti_goodhart import (
+    generate_rotation_bounds, rotate_weights, add_dp_noise,
+)
+from agent_rating_protocol import get_profile
+
+profile = get_profile("general-purpose")
+bounds = generate_rotation_bounds(profile)
+new_profile, event = rotate_weights(profile, bounds)
+# Weights rotated within published bounds
+
+noised_score = add_dp_noise(78.4, epsilon=1.0)
+# ~78.4 ± 2 points of Laplace noise
+```
+
 ## Install
 
 ```bash
@@ -45,160 +115,40 @@ pip install agent-rating-protocol[coc]
 
 ## Features
 
+### Core (v0.1/v0.2)
 - **5-dimension rating** — reliability, accuracy, latency, protocol_compliance, cost_efficiency (1-100 scale)
 - **Bilateral blind protocol** — commit-reveal ensures neither party sees the other's rating until both submit
-- **Sybil-resistant weighting** — W = log2(1 + age) x log2(1 + ratings_given). Score received never affects weight.
-- **Interaction verification** — verified/unilateral/self_reported levels with automatic 0.5x weight for unverified
-- **Anti-inflation calibration** — raters with low score variance (sigma < 10) get penalized (Section 4.6)
-- **Governance cap** — 10% max effective voting weight per agent (Section 5.4)
-- **Recency weighting** — recent ratings carry more weight within the rolling window
+- **Sybil-resistant weighting** — W = log2(1 + age) x log2(1 + ratings_given)
+- **Interaction verification** — verified/unilateral/self_reported levels with 0.5x multiplier
+- **Anti-inflation calibration** — low-variance raters penalized (Section 4.6)
+- **Governance cap** — 10% max effective voting weight per agent
 - **Append-only store** — JSONL-backed, tamper-evident via SHA-256 record hashes
-- **Rolling windows** — default 365-day window prevents stale reputation
-- **Confidence scoring** — new agents show high uncertainty, not zero trust
-- **Zero required dependencies** — stdlib only for core. Optional CoC integration.
-- **Identity-agnostic** — works with DIDs, URIs, ERC-8004, W3C VC, or plain strings
+- **Zero required dependencies** — stdlib only. Python 3.8+.
 
-## API Reference
+### v0.3.0: Composition Layer
+- **Signal composition algebra** — five operations in canonical order
+- **Standard weight profiles** — general-purpose, high-reliability, fast-turnaround, compliance-first, cost-optimized
+- **Custom profiles** — JSON-configurable with rotation bounds
+- **Composite signals** — with confidence, validity windows, weakest-input metadata
 
-### AgentIdentity (v0.2.0)
+### v0.3.0: Portability Layer
+- **Portable Reputation Bundles** — W3C Verifiable Credential format
+- **Multi-oracle attestation** — median consensus with divergence detection
+- **Trust discount model** — configurable per oracle trust, domain overlap, volume
+- **Merkle root computation** — binary Merkle tree over rating hashes
 
-```python
-from agent_rating_protocol import AgentIdentity
+### v0.3.0: Verification Layer
+- **Hash-chain verification** — individual rating integrity (basic)
+- **Merkle proof verification** — aggregate score verification (standard)
+- **Sampled verification** — configurable sample size for large rating sets
+- **ZKP threshold proofs** — placeholder interface for future integration
 
-# From a dict (whitepaper schema)
-identity = AgentIdentity.from_dict({
-    "agent_id": "did:example:123",
-    "identity_proof": "vc:proof:abc"
-})
-
-# From a plain string (backward compat)
-identity = AgentIdentity.from_dict("agent-a")
-
-# Access on RatingRecord
-record = RatingRecord(
-    rater_id="agent-a",
-    ratee_id="agent-b",
-    rater_identity_proof="did:proof:rater",
-)
-print(record.rater_identity)  # AgentIdentity(agent_id='agent-a', identity_proof='did:proof:rater')
-```
-
-### RatingRecord
-
-```python
-from agent_rating_protocol import RatingRecord
-
-record = RatingRecord(
-    rater_id="did:example:alice",
-    ratee_id="did:example:bob",
-    interaction_id="task-uuid-here",
-    reliability=85,
-    accuracy=90,
-    latency=75,
-    protocol_compliance=95,
-    cost_efficiency=70,
-    rater_chain_age_days=365,
-    rater_total_ratings_given=100,
-    rater_chain_length=1500,                  # v0.2.0: CoC chain length
-    verification_level="verified",             # v0.2.0: verified|unilateral|self_reported
-    rater_identity_proof="did:proof:alice",     # v0.2.0: optional identity proof
-    ratee_identity_proof="did:proof:bob",       # v0.2.0: optional identity proof
-)
-
-record.to_dict()       # JSON-serializable dict (whitepaper schema)
-record.to_json()       # JSON string
-record.verify_hash()   # True if record_hash is valid
-record.compute_hash()  # Recompute SHA-256 hash
-
-RatingRecord.from_dict(d)  # Deserialize from dict
-```
-
-### RatingStore
-
-```python
-from agent_rating_protocol import RatingStore
-
-store = RatingStore("ratings.jsonl")
-
-store.append_rating(record)               # Append (validates hash first)
-store.get_ratings_for("agent-b")          # Ratings received by agent
-store.get_ratings_by("agent-a")           # Ratings submitted by agent
-store.get_rating("uuid")                  # Look up by rating_id
-store.count()                             # Total ratings
-store.stats()                             # Summary statistics
-store.agents()                            # Per-agent rating counts
-```
-
-### Reputation Queries
-
-```python
-from agent_rating_protocol import get_reputation
-
-# All dimensions
-result = get_reputation(store, "agent-b", window_days=365)
-# {'agent_id': 'agent-b', 'num_ratings': 5, 'confidence': 0.3333, 'scores': {...}}
-
-# Single dimension
-result = get_reputation(store, "agent-b", dimension="reliability")
-# {'agent_id': 'agent-b', 'score': 85.0, 'dimension': 'reliability', ...}
-
-# With anti-inflation calibration (Section 4.6)
-result = get_reputation(store, "agent-b", apply_calibration=True)
-```
-
-### Governance Weights (v0.2.0)
-
-```python
-from agent_rating_protocol import get_governance_weights
-
-# Compute governance weights with 10% cap (Section 5.4)
-weights = get_governance_weights(store, cap=0.10)
-# {'agent-a': 56.4, 'agent-b': 12.3, ...}
-# No agent exceeds 10% of total pre-cap weight
-```
-
-### Bilateral Blind Protocol
-
-```python
-from agent_rating_protocol import BlindExchange, generate_nonce
-
-exchange = BlindExchange(interaction_id="task-001")
-
-# Agent A commits
-nonce_a = generate_nonce()
-exchange.submit_commitment("agent-a", rating_a.to_dict(), nonce_a)
-
-# Agent B commits
-nonce_b = generate_nonce()
-exchange.submit_commitment("agent-b", rating_b.to_dict(), nonce_b)
-
-# Both reveal (triggered when both committed)
-exchange.reveal_rating("agent-a", rating_a.to_dict(), nonce_a)
-exchange.reveal_rating("agent-b", rating_b.to_dict(), nonce_b)
-
-# Get simultaneous results
-rating_a_result, rating_b_result = exchange.get_results()
-```
-
-### Weight Calculation
-
-```python
-from agent_rating_protocol import (
-    rater_weight, confidence, effective_weight,
-    verification_level_multiplier, rater_calibration_factor,
-)
-
-w = rater_weight(chain_age_days=365, total_ratings_given=100)  # ~ 56.4
-c = confidence(num_ratings=50)  # ~ 0.833
-
-# v0.2.0: verification level multipliers
-verification_level_multiplier("verified")       # 1.0
-verification_level_multiplier("unilateral")     # 0.5
-verification_level_multiplier("self_reported")  # 0.5
-
-# v0.2.0: anti-inflation calibration
-factor = rater_calibration_factor([95, 95, 95, 96, 94])  # low sigma -> penalty
-```
+### v0.3.0: Anti-Goodhart Layer
+- **Signal tiers** — public, queryable, private stratification
+- **Metric rotation** — weights rotated within published bounds
+- **Shadow metrics** — divergence detection between primary and shadow signals
+- **Shadow commitments** — hash-based audit mechanism for oracle accountability
+- **Differential privacy** — Laplace noise injection with per-agent correlation
 
 ## CLI Reference
 
@@ -206,18 +156,9 @@ factor = rater_calibration_factor([95, 95, 95, 96, 94])  # low sigma -> penalty
 # Submit a rating
 agent-rating rate agent-b --rater agent-a --reliability 85 --accuracy 90
 
-# v0.2.0: with verification level and identity proofs
-agent-rating rate agent-b --rater agent-a --reliability 85 \
-  --verification-level unilateral \
-  --chain-length 1500 \
-  --rater-proof "did:proof:alice"
-
 # Query reputation
 agent-rating query agent-b
-agent-rating query agent-b --dimension reliability --window 180
-
-# v0.2.0: with anti-inflation calibration
-agent-rating query agent-b --calibrated
+agent-rating query agent-b --dimension reliability --window 180 --calibrated
 
 # Verify a rating hash
 agent-rating verify <rating-uuid>
@@ -225,34 +166,33 @@ agent-rating verify <rating-uuid>
 # Store statistics
 agent-rating status
 
+# v0.3.0: Compute composite score
+agent-rating compose agent-b --profile general-purpose --coc-age 100
+
+# v0.3.0: Generate Portable Reputation Bundle
+agent-rating export-prb agent-b --issuer did:web:oracle.example.com
+
+# v0.3.0: Verify signals via Merkle proof
+agent-rating verify-signal agent-b --sample 50
+
 # All commands support --json for machine-readable output
-agent-rating query agent-b --json
-
-# Custom store path
-agent-rating --store /path/to/ratings.jsonl status
+agent-rating compose agent-b --json
 ```
 
-## CoC Integration
+## Modules
 
-If [chain-of-consciousness](https://pypi.org/project/chain-of-consciousness/) is installed and the `COC_CHAIN_FILE` environment variable is set, ratings are automatically recorded as `RATING_SUBMITTED` chain entries:
-
-```bash
-export COC_CHAIN_FILE=chain.jsonl
-agent-rating rate agent-b --rater agent-a --reliability 85
-# -> Rating stored in ratings.jsonl AND recorded in chain.jsonl
-```
-
-## Rating Dimensions
-
-| Dimension | Measures | Scale |
-|-----------|----------|-------|
-| reliability | Task completion, uptime | 1-100 |
-| accuracy | Output correctness | 1-100 |
-| latency | Response speed vs. complexity | 1-100 |
-| protocol_compliance | Message format, handshake correctness | 1-100 |
-| cost_efficiency | Resource usage vs. value | 1-100 |
-
-Score buckets: 1-20 poor, 21-40 below average, 41-60 average, 61-80 good, 81-100 excellent.
+| Module | Description | Whitepaper Section |
+|--------|-------------|-------------------|
+| `rating.py` | Rating record schema, validation, hashing | v1 Section 4.1 |
+| `blind.py` | Bilateral blind commit-reveal | v1 Section 4.4 |
+| `weight.py` | Rater weight, calibration, recency, composition bridge | v1 Section 4.5, v2 Section 3 |
+| `store.py` | Append-only JSONL rating store | v1 Section 2.3 |
+| `query.py` | Reputation queries, composite scores, PRB generation | v1 Section 4.5, v2 Sections 3-4 |
+| `composition.py` | Signal composition algebra, weight profiles | v2 Section 3 |
+| `portability.py` | Portable Reputation Bundles, multi-oracle attestation | v2 Section 4 |
+| `signals.py` | Hash-chain, Merkle tree, ZKP verification | v2 Section 5 |
+| `anti_goodhart.py` | Metric rotation, shadow metrics, differential privacy | v2 Section 6 |
+| `cli.py` | Command-line interface | All |
 
 ## Weight Formula
 
@@ -260,28 +200,19 @@ Score buckets: 1-20 poor, 21-40 below average, 41-60 average, 61-80 good, 81-100
 W(rater) = log2(1 + chain_age_days) x log2(1 + total_ratings_given)
 ```
 
-Governance weight equals rating weight by design — both derived from tenure and participation, never from score received.
-
-**Verification level multipliers (v0.2.0):** Unilateral and self-reported ratings carry 0.5x weight.
-
-**Anti-inflation (v0.2.0):** Raters with standard deviation < 10 across all their scores are penalized by sigma/10.
-
-**Governance cap (v0.2.0):** No agent can hold >10% of effective voting weight.
-
 ## Canonicalization
 
-Record hashes use `json.dumps(sort_keys=True, separators=(",",":"))` for deterministic serialization. The whitepaper specifies JCS (RFC 8785). The deviation is documented in the source and has no practical impact for the data types used (strings, integers, booleans). For strict compliance, substitute an RFC 8785 library.
+Record hashes use `json.dumps(sort_keys=True, separators=(",",":"))` for deterministic serialization. The whitepaper specifies JCS (RFC 8785). The deviation is documented in source and has no practical impact for the data types used. For strict compliance, substitute an RFC 8785 library.
 
 ## Whitepaper
 
-Full protocol specification, game theory analysis, and governance model:
-
-- **[Agent Rating Protocol Whitepaper](https://vibeagentmaking.com/whitepaper.html)** — Decentralized reputation for autonomous agent economies
+- **[Agent Rating Protocol v1](https://vibeagentmaking.com/whitepaper/rating-protocol/)** — Decentralized reputation for autonomous agent economies
+- **[Agent Rating Protocol v2](https://vibeagentmaking.com/whitepaper/rating-protocol/)** — Signal composition, portability, verification, anti-Goodhart
 - **[Chain of Consciousness](https://vibeagentmaking.com/whitepaper.html)** — Cryptographic provenance chains for AI agent identity
 
 ## Security Disclaimer (VAM-SEC v1.0)
 
-This software is provided for research and development purposes. The rating protocol includes cryptographic commitments (SHA-256) and a bilateral blind protocol, but has NOT been formally audited by a third-party security firm. Before using in production environments where reputation scores influence high-stakes decisions, conduct an independent security review. The append-only store provides tamper evidence but not tamper prevention — an attacker with filesystem access can modify the JSONL file directly. For stronger guarantees, use CoC integration with external anchoring (OTS + TSA).
+This software is provided for research and development purposes. The rating protocol includes cryptographic commitments (SHA-256), bilateral blind protocol, Merkle tree verification, and differential privacy mechanisms, but has NOT been formally audited by a third-party security firm. The ZKP module is a placeholder — it validates thresholds but does not generate real zero-knowledge proofs. Before using in production where reputation scores influence high-stakes decisions, conduct an independent security review. The append-only store provides tamper evidence but not tamper prevention. For stronger guarantees, use CoC integration with external anchoring (OTS + TSA).
 
 ## License
 
