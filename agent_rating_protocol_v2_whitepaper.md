@@ -310,7 +310,7 @@ The composition system is designed to avoid three documented FICO failure modes:
 
 ### 4.1 The Problem: Reputation Is the Most Valuable and Least Portable Asset
 
-Platform reputation systems are walled gardens by design. Research from the Business & Information Systems Engineering journal found that 94% of e-commerce sellers attempt to import reputation when entering a new platform, but effectiveness varies dramatically by platform type — cross-platform reputation effects are "much more compatible among e-commerce platforms than other types" [11]. Neither incumbent nor entrant platforms have an incentive to offer reputation export: incumbents treat reputation data as a competitive moat, and entrants want users to build fresh reputations [12].
+Platform reputation systems are walled gardens by design. Research published in *Business & Information Systems Engineering* argued that reputation portability between platforms is structurally constrained — cross-platform reputation effects are "much more compatible among e-commerce platforms than other types," and incentive alignment between incumbents and entrants works against portability [11]. Neither incumbent nor entrant platforms have an incentive to offer reputation export: incumbents treat reputation data as a competitive moat, and entrants want users to build fresh reputations [12].
 
 This mirrors the pre-FICO era of credit scoring, where each bank maintained proprietary creditworthiness assessments with no portability. FICO's critical adoption milestones — general-purpose score (1989), availability at all three bureaus (1991), Fannie Mae/Freddie Mac adoption (1995) — demonstrate that portability requires: (a) a common standard, (b) institutional embedding, and (c) network effects where each new adopter makes the score more valuable to all others [4].
 
@@ -844,14 +844,24 @@ The v2 schema extends v1 with optional fields:
 
 All `v2_extensions` fields are optional. A record with `"version": 2` and no `v2_extensions` is equivalent to a v1 record.
 
-### 8.4 Governance Transition
+### 8.4 Governance and Protocol Evolution
 
-The v1-to-v2 upgrade follows the governance process specified in v1 Section 5.4:
+ARP governance uses its own GovWeight-based voter base, independent of both CoC governance (Layer 0a) and TAC governance (Layer 1). This independence is mandated by the separation principle in the Cross-Protocol Governance Architecture (see Theory of Agent Trust §5.2, Layer 0).
 
-1. **Proposal.** A v2 upgrade proposal requires 20% of total GovWeight to propose.
-2. **Voting.** 75% supermajority required, with a 30-day cooling period.
-3. **Activation.** After governance approval, a 90-day transition period begins during which v1 and v2 operate in parallel.
-4. **Deprecation.** v1-only features are deprecated 365 days after v2 activation (per v1 Section 9.2 deprecation policy). v1 rating records are never deprecated — only v1-specific protocol behaviors.
+**Tiered decision model (vocabulary aligned with CoC v4.0.0 §6.6.3 four-tier model).** Four decision tiers govern ARP protocol evolution. Quorum is calculated against **total GovWeight of active ARP participants** — the sum of GovWeight across agents with GovWeight > 0, frozen at vote-opening:
+
+| Decision Type | Quorum (% of participant GovWeight) | Approval Threshold | Voting Period | Min. Distinct Voters |
+|---|---|---|---|---|
+| **Minor** (parameter tweaks, clarifications) | 15% | Simple majority (>50%) | 14 days | 5 + ⌊√max(0, p−30)⌋ |
+| **Standard** (structural changes, non-breaking features) | 25% | Supermajority (>50%) | 21 days | 10 + ⌊√max(0, p−30)⌋ |
+| **Major** (cross-protocol changes, governance mechanics) | 35% | Supermajority (≥66%) | 30 days | 15 + ⌊√max(0, p−30)⌋ |
+| **Constitutional** (GovWeight formula structure, bilateral blind requirement, governance-by-tenure principle) | 50% | Supermajority (≥75%) | 30 days + 14-day time-lock | 20 + ⌊√max(0, p−30)⌋ |
+
+where *p* is the count of ARP participants with GovWeight > 0 at vote-opening time. ARP's thresholds align with CoC's single-protocol thresholds; TAC uses stricter thresholds because its decisions cascade across five upper-stack protocols simultaneously.
+
+**v1-to-v2 upgrade (retroactive classification).** Under the four-tier taxonomy, the v1-to-v2 upgrade classifies as a **Major** decision — it adds four new protocol layers (composition, portability, verification, anti-Goodhart) without modifying constitutional properties. The v1 Section 5.4 governance process (20% GovWeight proposal threshold, 75% supermajority) exceeds the Major tier's requirements (35% quorum, ≥66% supermajority), confirming the upgrade was governed at an appropriately strict level.
+
+**Activation and deprecation.** After governance approval of a Major or Constitutional change, a 90-day transition period begins during which prior and new protocol versions operate in parallel. Features from the prior version are deprecated 365 days after activation (per v1 Section 9.2 deprecation policy). Rating records are never deprecated — only version-specific protocol behaviors.
 
 ### 8.5 Scalability Analysis
 
@@ -1053,7 +1063,7 @@ The following unsolved problems from v1 Section 9.1 remain open:
 
 [5] Upstart. "How AI Drives More Affordable Credit Access." 2025. https://www.upstart.com/
 
-[6] Scharfstein, D. & Gilland, W. "Zest AI." Harvard Business School Case 224-021, November 2023. (ML-based credit scoring achieving 25% more approvals across 180+ banks.)
+[6] Scharfstein, D. & Gilland, R. "Zest AI." Harvard Business School Case 224-033, November 2023. (ML-based credit scoring achieving 25% more approvals across 180+ banks.)
 
 [7] PayCrow. "PayCrow Escrow for x402 Agent Payments." earezki.com, 2026. (Note: $600M+ figure represents total annualized x402 ecosystem volume across all providers including Coinbase, not PayCrow's individual volume.)
 
@@ -1063,7 +1073,7 @@ The following unsolved problems from v1 Section 9.1 remain open:
 
 [10] National Consumer Law Center. "Past Imperfect: How Credit Scores Bake In Historical Discrimination." 2024.
 
-[11] Arets. "In Stars We Trust — Reputation Portability Between Digital Platforms." Business & Information Systems Engineering, Springer, 2021.
+[11] Hesse, M., Teubner, T., Adam, M.T.P. "In Stars We Trust — A Note on Reputation Portability Between Digital Platforms." *Business & Information Systems Engineering* 63, 349–358, 2021. DOI: 10.1007/s12599-021-00717-9
 
 [12] Tadelis, S. "Reputation and Feedback Systems in Online Platform Markets." UC Berkeley / Annual Review of Economics, 2016.
 
@@ -1113,13 +1123,13 @@ The following unsolved problems from v1 Section 9.1 remain open:
 
 [33] W3C. "Decentralized Identifiers (DIDs) v1.0." W3C Recommendation, July 2022. https://www.w3.org/TR/did-1.0/
 
-[34] arXiv:2511.02841. "AI Agents with Decentralized Identifiers and Verifiable Credentials." November 2025.
+[34] Rodriguez Garzon, S., et al. "AI Agents with Decentralized Identifiers and Verifiable Credentials." arXiv:2511.02841, October 2025 (revised November 2025).
 
-[35] Penn, D.J., et al. "The Handicap Principle: how an erroneous hypothesis became a scientific principle." Biological Reviews, 2020.
+[35] Penn, D.J., Számadó, S. "The Handicap Principle: how an erroneous hypothesis became a scientific principle." *Biological Reviews* 95(1):267–290, 2020.
 
 [36] Spence, M. "Job Market Signaling." Quarterly Journal of Economics, 1973. Nobel Prize in Economics, 2001.
 
-[37] Journal of Evolutionary Biology. "General signalling theory: why honest signals are explained by trade-offs rather than costs or handicaps." 2025.
+[37] Számadó, S., Zachar, I., Penn, D.J. "General signalling theory: why honest signals are explained by trade-offs rather than costs or handicaps." *Journal of Evolutionary Biology*, 39(2), February 2026.
 
 [38] Precedence Research. "AI Agents Market Size, Share, and Trends 2025 to 2034." 2025. (Widely cited by World Economic Forum, January 2026.)
 
