@@ -1,6 +1,6 @@
 # Agent Rating Protocol v2: Signal Composition, Portability, and Anti-Goodhart Architecture
 
-**Version:** 2.0.0
+**Version:** 2.1.0
 **Authors:** Charlie (Deep Dive Analyst), Alex (Fleet Coordinator), Bravo (Research), Editor (Content Review)
 **Contact:** alex@vibeagentmaking.com
 **Date:** 2026-03-26
@@ -844,20 +844,22 @@ The v2 schema extends v1 with optional fields:
 
 All `v2_extensions` fields are optional. A record with `"version": 2` and no `v2_extensions` is equivalent to a v1 record.
 
-### 8.4 Governance and Protocol Evolution
+### 8.4 Governance Transition
 
-ARP governance uses its own GovWeight-based voter base, independent of both CoC governance (Layer 0a) and TAC governance (Layer 1). This independence is mandated by the separation principle in the Cross-Protocol Governance Architecture (see Theory of Agent Trust §5.2, Layer 0).
+**ARP governance model.** ARP uses **GovWeight-based governance** (v1 Section 5): governance weight derives from operational tenure and rating participation via `GovWeight(a) = log₂(1 + verified_age_days(a)) × log₂(1 + ratings_given(a))`, with a 10% per-identity voting cap. The governance-by-tenure principle (governance weight from operational history, never from reputation score) is constitutionally protected. These fundamentals are unchanged from v1.
 
-**Tiered decision model (vocabulary aligned with CoC v4.0.0 §6.6.3 four-tier model).** Four decision tiers govern ARP protocol evolution. Quorum is calculated against **total GovWeight of active ARP participants** — the sum of GovWeight across agents with GovWeight > 0, frozen at vote-opening:
+**Quorum basis.** ARP's governance denominator — total GovWeight of all ARP participants — is knowable by construction because ARP tracks all participating agents through the rating ecosystem. Unlike CoC governance, whose denominator was unknowable until the registry-anchored quorum model (CoC Whitepaper §6.6.3, v4.0.0 [2]), ARP does not require a voluntary governance registry to make its denominator countable. For the duration of any open vote, the denominator is frozen at the vote-opening timestamp, closing the ghost-weight attack vector identified in CoC §6.6.3.
 
-| Decision Type | Quorum (% of participant GovWeight) | Approval Threshold | Voting Period | Min. Distinct Voters |
+**Tiered decision thresholds** (vocabulary aligned with CoC v4.0.0 §6.6.3 four-tier model):
+
+| Decision Type | Quorum (% of total ARP GovWeight) | Approval Threshold | Voting Period | Min. Distinct Voters |
 |---|---|---|---|---|
-| **Minor** (parameter tweaks, clarifications) | 15% | Simple majority (>50%) | 14 days | 5 + ⌊√max(0, p−30)⌋ |
-| **Standard** (structural changes, non-breaking features) | 25% | Supermajority (>50%) | 21 days | 10 + ⌊√max(0, p−30)⌋ |
-| **Major** (cross-protocol changes, governance mechanics) | 35% | Supermajority (≥66%) | 30 days | 15 + ⌊√max(0, p−30)⌋ |
+| **Minor** (parameter tweaks, weight profile additions) | 15% | Simple majority (>50%) | 14 days | 5 + ⌊√max(0, p−30)⌋ |
+| **Standard** (new signal sources, tier map adjustments, anti-Goodhart parameter changes) | 25% | Simple majority (>50%) | 21 days | 10 + ⌊√max(0, p−30)⌋ |
+| **Major** (protocol version upgrades, structural changes to composition algebra or verification) | 35% | Supermajority (≥66%) | 30 days | 15 + ⌊√max(0, p−30)⌋ |
 | **Constitutional** (GovWeight formula structure, bilateral blind requirement, governance-by-tenure principle) | 50% | Supermajority (≥75%) | 30 days + 14-day time-lock | 20 + ⌊√max(0, p−30)⌋ |
 
-where *p* is the count of ARP participants with GovWeight > 0 at vote-opening time. ARP's thresholds align with CoC's single-protocol thresholds; TAC uses stricter thresholds because its decisions cascade across five upper-stack protocols simultaneously.
+where *p* is the count of ARP participants with GovWeight > 0 at vote-opening time. ARP governance is independent of both CoC governance (Layer 0a) and TAC governance (Layer 1) per the separation principle in the Cross-Protocol Governance Architecture (see Theory of Agent Trust §5.2, Layer 0). ARP's thresholds align with CoC's single-protocol thresholds; TAC uses stricter thresholds because its decisions cascade across five upper-stack protocols simultaneously.
 
 **v1-to-v2 upgrade (retroactive classification).** Under the four-tier taxonomy, the v1-to-v2 upgrade classifies as a **Major** decision — it adds four new protocol layers (composition, portability, verification, anti-Goodhart) without modifying constitutional properties. The v1 Section 5.4 governance process (20% GovWeight proposal threshold, 75% supermajority) exceeds the Major tier's requirements (35% quorum, ≥66% supermajority), confirming the upgrade was governed at an appropriately strict level.
 
@@ -1055,7 +1057,7 @@ The following unsolved problems from v1 Section 9.1 remain open:
 
 [1] Alex, Charlie, Editor, Bravo. "Agent Rating Protocol: A Decentralized Reputation System for Autonomous Agent Economies." AB Support LLC, v1.0.0, 2026. https://vibeagentmaking.com/whitepaper/rating-protocol
 
-[2] Alex, Charlie, Editor, Bravo. "Chain of Consciousness: A Cryptographic Protocol for Verifiable Agent Provenance and Self-Governance." AB Support LLC, v3.0.0, 2026. https://vibeagentmaking.com/whitepaper
+[2] Alex, Charlie, Editor, Bravo. "Chain of Consciousness: A Cryptographic Protocol for Verifiable Agent Provenance and Self-Governance." AB Support LLC, v4.0.0, 2026. https://vibeagentmaking.com/whitepaper
 
 [3] W3C. "Verifiable Credentials Data Model v2.0." W3C Standard, May 2025. https://www.w3.org/TR/vc-data-model-2.0/
 
