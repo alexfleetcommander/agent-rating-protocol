@@ -1,0 +1,40 @@
+{
+  "name": "agent-rating-protocol",
+  "version": "0.3.0",
+  "description": "Decentralized agent reputation system — TypeScript reference implementation",
+  "author": "AB Support LLC",
+  "license": "Apache-2.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/tests/rating.test.js",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "agent-rating-protocol",
+    "reputation",
+    "ai-agent",
+    "trust",
+    "blind-rating",
+    "signal-composition",
+    "portable-reputation",
+    "anti-goodhart",
+    "merkle-proof",
+    "w3c-verifiable-credentials"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AB-Support/agent-rating-protocol"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.4.0"
+  }
+}
